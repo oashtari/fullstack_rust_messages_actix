@@ -9,7 +9,7 @@ use std::sync::atomic::{AtomicUsize, Ordering};
 use std::sync::{Arc, Mutex};
 
 
-// const LOG_FORMAT: &'static str = r#""%r" %s %b "%{User-Agent}i" %D"#;
+const LOG_FORMAT: &'static str = r#""%r" %s %b "%{User-Agent}i" %D"#;
 static SERVER_COUNTER: AtomicUsize = AtomicUsize::new(0);
 
 struct AppState {
@@ -38,12 +38,12 @@ struct PostResponse {
     message: String,
 }
 
-// #[derive(Serialize)]
-// struct PostError {
-//     server_id: usize,
-//     request_count: usize,
-//     error: String,
-// }
+#[derive(Serialize)]
+struct PostError {
+    server_id: usize,
+    request_count: usize,
+    error: String,
+}
 
 
 #[get("/")]
@@ -92,37 +92,37 @@ fn clear(state: web::Data<AppState>) -> Result<web::Json<IndexResponse>> {
     }))
 }
 
-// fn post_error(err: JsonPayloadError, req: &HttpRequest) -> Error {
-//     let state = req.app_data::<AppState>().unwrap();
-//     let request_count = state.request_count.get() + 1;
-//     state.request_count.set(request_count);
-//     let post_error = PostError {
-//         server_id: state.server_id,
-//         request_count,
-//         error: format!("{}", err),
-//     };
-//     InternalError::from_response(err, HttpResponse::BadRequest().json(post_error)).into()
-// }
+fn post_error(err: JsonPayloadError, req: &HttpRequest) -> Error {
+    let state = req.app_data::<AppState>().unwrap();
+    let request_count = state.request_count.get() + 1;
+    state.request_count.set(request_count);
+    let post_error = PostError {
+        server_id: state.server_id,
+        request_count,
+        error: format!("{}", err),
+    };
+    InternalError::from_response(err, HttpResponse::BadRequest().json(post_error)).into()
+}
 
-// #[derive(Serialize)]
-// struct LookupResponse {
-//     server_id: usize,
-//     request_count: usize,
-//     result: Option<String>,
-// }
+#[derive(Serialize)]
+struct LookupResponse {
+    server_id: usize,
+    request_count: usize,
+    result: Option<String>,
+}
 
-// #[get("/lookup/{index}")]
-// fn lookup(state: web::Data<AppState>, idx: web::Path<usize>) -> Result<web::Json<LookupResponse>> {
-//     let request_count = state.request_count.get() + 1;
-//     state.request_count.set(request_count);
-//     let ms = state.messages.lock().unwrap();
-//     let result = ms.get(idx.into_inner()).cloned();
-//     Ok(web::Json(LookupResponse {
-//         server_id: state.server_id,
-//         request_count,
-//         result,
-//     }))
-// }
+#[get("/lookup/{index}")]
+fn lookup(state: web::Data<AppState>, idx: web::Path<usize>) -> Result<web::Json<LookupResponse>> {
+    let request_count = state.request_count.get() + 1;
+    state.request_count.set(request_count);
+    let ms = state.messages.lock().unwrap();
+    let result = ms.get(idx.into_inner()).cloned();
+    Ok(web::Json(LookupResponse {
+        server_id: state.server_id,
+        request_count,
+        result,
+    }))
+}
 
 
 
@@ -181,14 +181,15 @@ impl MessageApp {
                 request_count: Cell::new(0),
                 messages: messages.clone(),
             })
-            .wrap(middleware::Logger::default())
+            .wrap(middleware::Logger::new(LOG_FORMAT))
             .service(index)
             .service(
                 web::resource("/send")
-                    .data(web::JsonConfig::default().limit(4096))
+                    .data(web::JsonConfig::default().limit(4096).error_handler(post_error))
                     .route(web::post().to(post)),
             )
             .service(clear)
+            .service(lookup)
         })
         .bind(("127.0.0.1", self.port))?
         .workers(8)
